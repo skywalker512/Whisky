@@ -17,6 +17,13 @@
 #   scripts/ddraw-repro.sh --renderer vulkan  # wined3d on Vulkan (KosmicKrisp)
 #   scripts/ddraw-repro.sh --both             # both, in sequence, and compare
 #   scripts/ddraw-repro.sh --test dx8         # a different backend
+#   scripts/ddraw-repro.sh --env bare        # without the variables Whisky sets
+#   scripts/ddraw-repro.sh --repeat 3        # same combination three times
+#
+# --env is the one that has actually separated a good run from a bad one. On
+# 2026-08-09 the same test at 18:47:33 came up clean under the full Whisky
+# environment and blacked the display at 18:47:56 under a bare one, 12 seconds
+# apart. That is a single pair, so it may yet be luck -- hence --repeat.
 #
 # If the screen goes black: the machine is usually still on the network. From
 # another host, ssh in and run scripts/whisky-panic.sh (add --session if the
@@ -36,6 +43,8 @@ RENDERER=gl
 TEST=ddraw2d
 SECONDS_RUN=5
 BOTH=0
+ENVSET=whisky
+REPEAT=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -43,6 +52,8 @@ while [ $# -gt 0 ]; do
         --test)     TEST="$2";     shift 2 ;;
         --seconds)  SECONDS_RUN="$2"; shift 2 ;;
         --both)     BOTH=1; shift ;;
+        --env)      ENVSET="$2"; shift 2 ;;
+        --repeat)   REPEAT="$2"; shift 2 ;;
         -h|--help)  sed -n '2,30p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -66,26 +77,33 @@ mkdir -p "$OUT"
 # --- one run -----------------------------------------------------------------
 run_once() {  # <renderer>
     local renderer="$1"
-    local tag="$TEST-$renderer"
+    local tag="$TEST-$renderer-$ENVSET-$(date +%H%M%S)"
     local log="$OUT/$tag.log"
     local started ended
 
-    say "Running $TEST with the $renderer renderer (${SECONDS_RUN}s, exits on its own)"
+    say "Running $TEST -- renderer=$renderer env=$ENVSET (${SECONDS_RUN}s, exits on its own)"
 
-    # The environment Whisky itself sets, so the run matches how the app
-    # launches things rather than a bare shell's idea of it.
+    # Only what Wine cannot run without. Anything beyond this is what the
+    # comparison is about.
     local -a env_vars=(
         "WINEPREFIX=$BOTTLE"
         "WINEDEBUG=+winediag"
         "DYLD_FALLBACK_LIBRARY_PATH=$WINE_DIR/lib"
-        "PROTON_DISABLE_LSTEAMCLIENT=1"
-        "WINEMSYNC_NO_MANUALEVENT=1"
-        "WINE_NX_COMPAT=1"
-        "WINE_DISABLE_IPV6=1"
-        "SDL_JOYSTICK_MFI=0"
-        "GST_DEBUG=1"
-        "DXVK_CONFIG=dxvk.numCompilerThreads = 4"
     )
+    # The rest is what the Whisky app sets when it launches a program, so a
+    # `whisky` run reflects how a bottle actually behaves and a `bare` one
+    # reflects launching the same binary from a shell by hand.
+    if [ "$ENVSET" = whisky ]; then
+        env_vars+=(
+            "PROTON_DISABLE_LSTEAMCLIENT=1"
+            "WINEMSYNC_NO_MANUALEVENT=1"
+            "WINE_NX_COMPAT=1"
+            "WINE_DISABLE_IPV6=1"
+            "SDL_JOYSTICK_MFI=0"
+            "GST_DEBUG=1"
+            "DXVK_CONFIG=dxvk.numCompilerThreads = 4"
+        )
+    fi
     # wined3d reads this ahead of the registry and it lasts exactly one run, so
     # nothing persists into the bottle either way.
     [ "$renderer" = vulkan ] && env_vars+=("WINE_D3D_CONFIG=renderer=vulkan")
@@ -143,14 +161,18 @@ run_once() {  # <renderer>
 
 printf 'test\texit\tcompiles\tgpu_errors\tstarted\n' > "$OUT/summary.tsv"
 
-if [ "$BOTH" = 1 ]; then
-    run_once gl
-    say "Pausing 10s between runs so the two are cleanly separated in the log"
-    sleep 10
-    run_once vulkan
-else
-    run_once "$RENDERER"
-fi
+for i in $(seq 1 "$REPEAT"); do
+    [ "$REPEAT" -gt 1 ] && say "Pass $i of $REPEAT"
+    if [ "$BOTH" = 1 ]; then
+        run_once gl
+        say "Pausing 10s so the two runs stay separable in the log"
+        sleep 10
+        run_once vulkan
+    else
+        run_once "$RENDERER"
+    fi
+    [ "$i" -lt "$REPEAT" ] && sleep 10
+done
 
 say "Summary"
 column -t -s "$(printf '\t')" "$OUT/summary.tsv"
