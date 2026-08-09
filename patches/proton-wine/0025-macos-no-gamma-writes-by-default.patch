@@ -1,0 +1,44 @@
+Subject: winemac.drv: do not let applications set the display gamma by default
+
+A DirectDraw test blacked the entire Mac display on exit, and it stayed
+black after the process was gone: wined3d writes the saved gamma ramp back
+when a swapchain is torn down, and it had never checked that the read which
+produced that ramp succeeded, so it wrote zeroes. Nothing undoes that. The
+ramp is display state, owned by no process, so the desktop stays dark until
+something else sets one -- and the user cannot see well enough to do it.
+
+The wined3d bug is worth fixing on its own (patch 0024), but it is not the
+only way to reach a bad ramp, and the display is the one resource a user
+cannot recover from once it is gone. On a platform where a prefix is a
+sandbox for one application, letting that application reach out and change
+the whole machine's display is not a trade worth making by default.
+
+CrossOver reaches the same conclusion from the other direction: its stock
+bottle ships "AllowSetGamma"=dword:00000000, with the wined3d code left
+exactly as upstream has it. This tree targets one platform, so the default
+belongs in the driver rather than in every prefix.
+
+The registry key still works, so a prefix that genuinely needs gamma -- an
+old game that dims the screen for a fade -- can set it back to 1.
+diff --git a/dlls/winemac.drv/macdrv_main.c b/dlls/winemac.drv/macdrv_main.c
+index ed91383..770015b 100644
+--- a/dlls/winemac.drv/macdrv_main.c
++++ b/dlls/winemac.drv/macdrv_main.c
+@@ -45,7 +45,16 @@ C_ASSERT(NUM_EVENT_TYPES <= sizeof(macdrv_event_mask) * 8);
+ int topmost_float_inactive = TOPMOST_FLOAT_INACTIVE_NONFULLSCREEN;
+ bool capture_displays_for_fullscreen = false;
+ BOOL allow_vsync = TRUE;
+-BOOL allow_set_gamma = TRUE;
++/* Default off on macOS. The gamma ramp is display state that no process owns:
++ * an application that sets one and then exits leaves the desktop under it, and
++ * a ramp of zeroes leaves the whole screen black with no way to recover from
++ * the machine itself. wined3d reaches this on every swapchain teardown, and it
++ * restores a ramp it never checked it had read -- so a failed read blacks the
++ * display of a user who never asked any application to touch gamma.
++ * HKCU\Software\Wine\Mac Driver "AllowSetGamma"=1 turns it back on for a
++ * prefix that wants it. CrossOver ships the same conclusion as a per-bottle
++ * setting; this tree targets one platform, so it is the default. */
++BOOL allow_set_gamma = FALSE;
+ bool left_option_is_alt = false;
+ bool right_option_is_alt = false;
+ bool left_command_is_ctrl = false;
