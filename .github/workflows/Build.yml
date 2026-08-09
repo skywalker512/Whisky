@@ -10,6 +10,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  # Use upstream Homebrew from GitHub Actions (USTC mirrors are for local CN nets).
+  WHISKY_HOMEBREW_MIRRORS: "0"
+  # Keep CI builds reproducible / avoid ccache warm-up surprises across runners.
+  WHISKY_CCACHE: "0"
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+
 jobs:
   app:
     name: Build Whisky (macOS)
@@ -62,3 +70,60 @@ jobs:
           path: ${{ runner.temp }}/DerivedData/Build/Products/Release/Whisky.app
           if-no-files-found: error
           retention-days: 14
+
+  wine:
+    name: Build Wine / DXMT / DXVK
+    runs-on: macos-26
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install Rosetta 2
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+
+      - name: Install ARM Homebrew build tools
+        run: |
+          brew install autoconf automake libtool pkg-config bison flex \
+            mingw-w64 meson ninja python3 cmake
+
+      - name: Fetch proton-wine base
+        run: scripts/fetch-proton-wine.sh
+
+      - name: Setup x86_64 Homebrew + Wine libs
+        run: scripts/setup-x86-brew.sh
+
+      - name: Build minimal x86_64 FFmpeg (winedmo)
+        run: scripts/build-ffmpeg-x86.sh
+
+      - name: Build Proton (make proton)
+        run: make proton
+
+      - name: Build DXMT
+        run: make dxmt
+
+      - name: Build DXVK (d3d9/d3d8)
+        run: make dxvk
+
+      - name: Smoke — wine --version
+        run: |
+          WINE="$HOME/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/bin/wine64"
+          arch -x86_64 "$WINE" --version
+          ls -la "$HOME/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/lib/wine/x86_64-windows/"{d3d11,d3d9,dxgi,winemetal}.dll
+          ls -la "$HOME/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/lib/wine/x86_64-unix/winemetal.so"
+
+      - name: Upload Wine libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: Whisky-Libraries
+          path: /Users/runner/Library/Application Support/com.isaacmarovitz.Whisky/Libraries
+          if-no-files-found: error
+          retention-days: 7

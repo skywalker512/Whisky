@@ -18,7 +18,7 @@ XCODEBUILD := xcodebuild -project Whisky.xcodeproj -scheme Whisky
 CODESIGN_OFF := CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 
 .PHONY: all help setup-x86-brew proton proton-debug clean-proton \
-        dxmt dxvk proxychains app app-release install-app lint format lint-swiftlint run submodule clean check-proton-src
+        dxmt dxvk proxychains app app-release install-app lint format lint-swiftlint run submodule clean check-proton-src fetch-proton-wine
 
 all: app proton  ## Build everything (app + Proton)
 
@@ -44,6 +44,9 @@ $(WINE_STAMP): $(X86_BREW) $(wildcard $(CURDIR)/patches/proton-wine/*.patch) | c
 # vendor/proton-wine is gitignored (laid down from a tarball, not a submodule), so
 # guard the build with a clear message instead of make's cryptic "No rule to make
 # target '.../configure'" when the source tree is absent on a fresh clone.
+fetch-proton-wine:  ## Clone Valve proton-wine base into vendor/proton-wine (gitignored)
+	$(SCRIPTS_DIR)/fetch-proton-wine.sh
+
 check-proton-src:
 	@test -f "$(WINE_SRC)/configure" || { \
 		echo "ERROR: Proton source missing at $(WINE_SRC)"; \

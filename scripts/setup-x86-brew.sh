@@ -5,14 +5,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
 echo "=== Installing x86_64 Homebrew to $X86_BREW_HOME ==="
 mkdir -p "$(dirname "$X86_BREW_HOME")"
+export_homebrew_mirrors
+BREW_CLONE_URL="${HOMEBREW_BREW_GIT_REMOTE:-https://github.com/Homebrew/brew.git}"
 if [ ! -f "$X86_BREW_HOME/bin/brew" ]; then
-    git clone https://mirrors.ustc.edu.cn/brew.git "$X86_BREW_HOME"
+    git clone --depth 1 "$BREW_CLONE_URL" "$X86_BREW_HOME"
 else
     echo "Already installed, updating..."
-    cd "$X86_BREW_HOME" && git pull
+    git -C "$X86_BREW_HOME" pull --ff-only || true
 fi
-
-export_homebrew_mirrors
 
 echo "=== Installing Wine build dependencies (x86_64) ==="
 # Only libraries linked into x86_64 Wine need to be x86_64. Build tools (bison,

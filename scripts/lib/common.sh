@@ -48,9 +48,17 @@ if [ -z "${DEVELOPER_DIR:-}" ]; then
 fi
 export DEVELOPER_DIR
 
-# USTC mirrors for Homebrew (git remotes + bottle/api domains). Call before any
-# x86_64 `brew` invocation that may fetch from the network.
+# Homebrew remotes/bottle domains. Local CN setups want USTC; GitHub Actions
+# (and anyone setting WHISKY_HOMEBREW_MIRRORS=0) should hit upstream instead —
+# USTC is unreachable or slow from most CI egress.
 export_homebrew_mirrors() {
+    case "${WHISKY_HOMEBREW_MIRRORS:-1}" in
+        0|false|FALSE|no|NO) return 0 ;;
+    esac
+    # Also skip when GitHub Actions sets CI=true unless mirrors were forced on.
+    if [ "${CI:-}" = true ] && [ "${WHISKY_HOMEBREW_MIRRORS:-}" != "1" ]; then
+        return 0
+    fi
     export HOMEBREW_BREW_GIT_REMOTE=https://mirrors.ustc.edu.cn/brew.git
     export HOMEBREW_CORE_GIT_REMOTE=https://mirrors.ustc.edu.cn/homebrew-core.git
     export HOMEBREW_BOTTLE_DOMAIN=https://mirrors.ustc.edu.cn/homebrew-bottles
