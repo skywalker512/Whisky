@@ -1,0 +1,59 @@
+Subject: kernelbase: append --no-sandbox --in-process-gpu to steamwebhelper.exe
+
+Steam's CEF host steamwebhelper.exe crashes under Wine on macOS without two
+Chromium flags:
+
+  - --no-sandbox: CEF's sandbox hooks the NT kernel and, under Wine's
+    incomplete sandbox emulation, deadlocks its own cross-thread IPC
+    (src/common/pipes.cpp "Stalled cross-thread pipe" -> Fatal assert ->
+    _ExitOnFatalAssert; the host exits).
+
+  - --in-process-gpu: the out-of-process GPU process cannot create an
+    ANGLE/D3D11 window surface on the browser window, so the UI never paints:
+
+        SwapChain11.cpp:636 rx::SwapChain11::reset: Could not create additional
+          swap chains or offscreen surfaces, HRESULT: 0x80004005
+        EGL Driver message (Critical) eglCreateWindowSurface: Bad allocation.
+        eglCreateWindowSurface failed with error EGL_BAD_ALLOC
+
+This flag was removed once, on the theory that the surface failure was a symptom
+of patch 0009 -- winemac's DXMT shim built a Metal view only for toplevel
+windows, so a child HWND, which is what a browser composites into, got NULL and
+DXMT abort()ed -- and that 0009 creating a client surface for child HWNDs had
+made it unnecessary. Retested against a live Steam session: it had not. The
+webhelper came up, ran at normal CPU with no death-loop, and logged exactly the
+three errors above; no window ever appeared. The two failures are independent,
+so the flag stays.
+
+NOTE: the GPU process's SharedImageStub (GPU virtualization) requires a shared
+GLES3 context. ANGLE's D3D11 backend only reaches GLES3 when d3d11 is DXMT
+(Metal, feature level 11_1); the Wine builtin wined3d caps at feature level
+9_3 (macOS GL 2.1, no core context) -> GLES2 only -> "Failed to create shared
+context for virtualization" retry loop. So this flag assumes DXMT is installed
+as the d3d11 builtin (`make dxmt`); `make proton` alone reinstalls wined3d's
+d3d11 and must be followed by `make dxmt` (build-proton-x86.sh now restores
+DXMT over wined3d after install to make this order-independent).
+
+Whisky previously injected the flags via an IFEO "Debugger" wrapper around
+steamwebhelper.exe (steamwebhelper_wrapper.exe + a steamwebhelper_real.exe copy
++ a per-bottle registry value, on top of patch 0010's IFEO-debugger support).
+That is a lot of machinery for two flags. Wine already has a
+hack_append_command_line() table that appends flags per-exe (Warhammer2.exe and
+SummerIslands.exe already get --in-process-gpu there), so this adds a
+steamwebhelper.exe entry instead. The substring match catches every
+steamwebhelper.exe launch (browser + renderer/gpu/utility children), matching
+the prior wrapper's behavior, and lets us delete the wrapper binary, the _real
+copy, the IFEO registry setup, and the Steam.swift plumbing for it.
+
+diff --git a/dlls/kernelbase/process.c b/dlls/kernelbase/process.c
+index 6da31d7a8f9..d8311a71b29 100644
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -626,6 +626,7 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
+         {L"Red Tie Runner.exe", L" --use-angle=gl"},
+         {L"UnrealCEFSubProcess.exe", L" --use-gl=swiftshader", "2316580"},
+         {L"UnrealCEFSubProcess.exe", L" --use-angle=d3d9", "2684500"},
++        {L"steamwebhelper.exe", L" --no-sandbox --in-process-gpu"},
+     };
+     unsigned int i;
+     char sgi[64];
