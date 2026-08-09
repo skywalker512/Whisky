@@ -18,11 +18,15 @@ the application dies, so the desktop stays dark until something else sets
 it. That is what made this look like a driver or compositor failure rather
 than an application one.
 
-Report the failure, and only restore a ramp that was captured.
+Report the failed read, and restore only a ramp that was captured. The
+value is checked too, not just the return code: an all-zero ramp is a black
+display, which no desktop is in when a swapchain is created, and it is not
+yet established which of the two routes to one this was taking.
+
+The same code is in Wine master as of this writing, unchecked.
 
 Reproduced on macOS 26 with a DirectDraw 2D test: two identical runs, the
-second one black on exit, gamma reading 0.000 across all three channels.
-
+second black on exit, gamma reading 0.000 across all three channels.
 diff --git a/dlls/wined3d/directx.c b/dlls/wined3d/directx.c
 index 8f13e84..bc86b59 100644
 --- a/dlls/wined3d/directx.c
@@ -54,10 +58,35 @@ index 8f13e84..bc86b59 100644
  
      return WINED3D_OK;
 diff --git a/dlls/wined3d/swapchain.c b/dlls/wined3d/swapchain.c
-index cf73b56..a19e11c 100644
+index cf73b56..e78507d 100644
 --- a/dlls/wined3d/swapchain.c
 +++ b/dlls/wined3d/swapchain.c
-@@ -48,7 +48,12 @@ void wined3d_swapchain_cleanup(struct wined3d_swapchain *swapchain)
+@@ -40,6 +40,24 @@ static BOOL set_window_present_rect(HWND hwnd, UINT x, UINT y, UINT width, UINT
+     return !D3DKMTEscape(&escape);
+ }
+ 
++/* A ramp of nothing but zeroes maps every value to black. No desktop is in
++ * that state when a swapchain is created, so reading one back means the read
++ * did not produce a ramp -- whether or not it admitted as much. Checking the
++ * value as well as the return code covers both, which matters because it is
++ * not yet known which of the two the display was actually hitting. */
++static bool gamma_ramp_is_black(const struct wined3d_gamma_ramp *ramp)
++{
++    unsigned int i;
++
++    for (i = 0; i < ARRAY_SIZE(ramp->red); ++i)
++    {
++        if (ramp->red[i] || ramp->green[i] || ramp->blue[i])
++            return false;
++    }
++
++    return true;
++}
++
+ void wined3d_swapchain_cleanup(struct wined3d_swapchain *swapchain)
+ {
+     HRESULT hr;
+@@ -48,7 +66,12 @@ void wined3d_swapchain_cleanup(struct wined3d_swapchain *swapchain)
      TRACE("Destroying swapchain %p.\n", swapchain);
  
      wined3d_swapchain_state_cleanup(&swapchain->state);
@@ -71,13 +100,14 @@ index cf73b56..a19e11c 100644
  
      /* Release the swapchain's draw buffers. Make sure swapchain->back_buffers[0]
       * is the last buffer to be destroyed, FindContext() depends on that. */
-@@ -1693,7 +1698,8 @@ static HRESULT wined3d_swapchain_init(struct wined3d_swapchain *swapchain, struc
+@@ -1693,7 +1716,9 @@ static HRESULT wined3d_swapchain_init(struct wined3d_swapchain *swapchain, struc
          }
      }
  
 -    wined3d_swapchain_get_gamma_ramp(swapchain, &swapchain->orig_gamma);
 +    swapchain->orig_gamma_valid =
-+            SUCCEEDED(wined3d_swapchain_get_gamma_ramp(swapchain, &swapchain->orig_gamma));
++            SUCCEEDED(wined3d_swapchain_get_gamma_ramp(swapchain, &swapchain->orig_gamma))
++            && !gamma_ramp_is_black(&swapchain->orig_gamma);
  
      wined3d_mutex_unlock();
  
