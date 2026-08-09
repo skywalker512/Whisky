@@ -18,16 +18,19 @@
 #
 #   scripts/whisky-panic.sh                 # collect evidence, then kill Wine
 #   scripts/whisky-panic.sh --session       # also re-init the window session
+#   scripts/whisky-panic.sh --wsrestart     # restart WindowServer (logs you out)
 #   scripts/whisky-panic.sh --reboot        # clean reboot, last resort
 #
 set -uo pipefail
 
 DO_SESSION=0
+DO_WSRESTART=0
 DO_REBOOT=0
 for arg in "$@"; do
     case "$arg" in
-        --session) DO_SESSION=1 ;;
-        --reboot)  DO_REBOOT=1 ;;
+        --session)   DO_SESSION=1 ;;
+        --wsrestart) DO_WSRESTART=1 ;;
+        --reboot)    DO_REBOOT=1 ;;
         -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
@@ -66,6 +69,36 @@ log show --last 6m --style compact 2>/dev/null \
     | grep -iE 'AGX|IOAF|GPU restart|GPU hang|device lost|link unstable|retrain' \
     | tail -20 | tee "$EVIDENCE/gpu.txt"
 
+# These need root and are pure observation. Grant them once in
+# /etc/sudoers.d (sample, spindump, powermetrics, killall -HUP WindowServer)
+# so this runs unattended while the screen is dark; each is attempted
+# individually and simply skipped when it is not permitted, rather than
+# blocking on a password prompt nobody can see. Probing with `sudo -n true`
+# would report the wrong answer, since a correctly narrow rule does not
+# include `true`. A screenshot is deliberately not attempted: screen capture
+# is gated behind TCC, which neither root nor launchctl asuser satisfies from
+# an ssh session.
+say "Sampling WindowServer (says what it is spinning on)"
+if sudo -n /usr/bin/sample WindowServer 3 -file "$EVIDENCE/windowserver-sample.txt" >/dev/null 2>&1; then
+    grep -A12 'Call graph' "$EVIDENCE/windowserver-sample.txt" | head -16
+else
+    echo "(not permitted -- add /usr/bin/sample to /etc/sudoers.d)"
+fi
+
+say "GPU power state (a wedged GPU sits pinned, an idle one drops to P1)"
+if sudo -n /usr/bin/powermetrics --samplers gpu_power -n 1 -i 300 > "$EVIDENCE/gpu-power.txt" 2>/dev/null; then
+    grep -iE 'GPU HW active|idle residency' "$EVIDENCE/gpu-power.txt"
+else
+    echo "(not permitted -- add /usr/bin/powermetrics to /etc/sudoers.d)"
+fi
+
+say "System-wide spindump (catches whoever else is stuck)"
+if sudo -n /usr/sbin/spindump -reveal 2 1 -file "$EVIDENCE/spindump.txt" >/dev/null 2>&1; then
+    echo "written to $EVIDENCE/spindump.txt"
+else
+    echo "(not permitted -- add /usr/sbin/spindump to /etc/sudoers.d)"
+fi
+
 # The wineserver goes last: killing it first reparents its clients to launchd,
 # and from then on KERN_PROCARGS2 stops answering for them, so an orphan can no
 # longer be attributed to a bottle.
@@ -96,6 +129,15 @@ if [ "$DO_SESSION" = 1 ]; then
     # 2.7% and the display came back, with the whole session intact.
     say "Re-initialising the window session (log back in; nothing is killed)"
     "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession" -suspend
+fi
+
+if [ "$DO_WSRESTART" = 1 ]; then
+    # Heavier than --session: this tears the whole window session down and
+    # every app goes with it. Only worth reaching for when re-initialising the
+    # session did not bring the display back.
+    say "Restarting WindowServer (every app is lost; you land at the login window)"
+    sudo -n /usr/bin/killall -HUP WindowServer 2>/dev/null \
+        || sudo /usr/bin/killall -HUP WindowServer
 fi
 
 if [ "$DO_REBOOT" = 1 ]; then
