@@ -216,9 +216,11 @@ run_once() {  # <renderer>
         announce "black screen detected. stopping."
         SCREEN_BROKE=1
 
-        # Cycling display power re-runs the mode set and the gamma upload, the
-        # cheapest thing that touches both suspected states. It kills nothing.
+        # The ramp is display state and outlives the process that set it, so
+        # nothing puts it back on its own. This runs in the window session
+        # already, which is where it has to happen.
         say "Trying to bring the display back (nothing is killed)"
+        [ -x "$SCREEN_BIN" ] && "$SCREEN_BIN" --restore
         pmset displaysleepnow
         sleep 4
         caffeinate -u -t 3

@@ -14,6 +14,7 @@
 #include <ApplicationServices/ApplicationServices.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void dump_gamma(void)
 {
@@ -87,8 +88,18 @@ static void dump_windows(void)
     CFRelease(list);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    /* Restoring is the same subject as reporting, so it lives here rather than
+     * in a second binary that could drift from it. Note it only takes effect
+     * from inside the window session -- run under `launchctl asuser` when
+     * coming in over ssh, or CoreGraphics silently addresses nothing. */
+    if (argc > 1 && strcmp(argv[1], "--restore") == 0) {
+        CGDisplayRestoreColorSyncSettings();
+        printf("gamma: restored from the ColorSync profile\n");
+        return 0;
+    }
+
     dump_gamma();
     printf("\n");
     dump_windows();

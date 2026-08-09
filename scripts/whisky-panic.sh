@@ -138,11 +138,26 @@ say "Flushing filesystem buffers"
 sync
 
 if [ "$DO_SESSION" = 1 ]; then
-    # Cycling display power re-runs the mode set and the gamma upload, which is
-    # the cheapest thing that touches both of the states a healthy compositor
-    # can still render as black. Nothing is killed. CGSession -suspend used to
-    # live here on the claim that it recovered the 18:25 outage; that binary
-    # does not exist on macOS 26, so it never ran and cannot have.
+    # A zeroed gamma ramp is display state that outlives the process that set
+    # it, so nothing brings it back on its own -- not the app exiting, not a
+    # display power cycle. Reloading the ColorSync profile does, and it costs
+    # nothing when the ramp was fine. It has to run inside the window session:
+    # from an ssh session CoreGraphics addresses no display and reports success
+    # anyway, which is why an earlier attempt looked like it had worked.
+    if [ -x "$SCREEN_BIN" ]; then
+        say "Restoring the display gamma ramp"
+        if sudo -n launchctl asuser "$(stat -f %u /dev/console)" "$SCREEN_BIN" --restore 2>/dev/null; then
+            :
+        else
+            "$SCREEN_BIN" --restore
+            echo "(ran outside the window session -- if the screen is still black,"
+            echo " run it on the Mac itself: $SCREEN_BIN --restore)"
+        fi
+        "$SCREEN_BIN" | head -3
+    fi
+
+    # Only then the heavier lever: a power cycle re-runs the mode set, which
+    # helps when the panel rather than the ramp is the problem.
     say "Cycling the display (nothing is killed)"
     pmset displaysleepnow
     sleep 4

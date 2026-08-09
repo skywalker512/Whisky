@@ -1,0 +1,95 @@
+Subject: wined3d: do not restore a gamma ramp that was never read
+
+Closing a DirectDraw application left the entire Mac display black, and it
+stayed black after the process had exited -- the compositor kept drawing
+normally, the GPU was idle, the unified log recorded nothing. Reading the
+gamma ramp back showed why: every entry was zero.
+
+wined3d_swapchain_init() saves the display's ramp so teardown can put it
+back. The read goes through wined3d_output_get_gamma_ramp(), which ignored
+whether CreateDCW() or GetDeviceGammaRamp() succeeded and returned
+WINED3D_OK regardless. GetDeviceGammaRamp() leaves the caller's buffer
+untouched when it fails, and the swapchain is allocated zeroed, so a failed
+read left orig_gamma all zeros with nothing to distinguish it from a real
+one. wined3d_swapchain_cleanup() then wrote those zeros to the display.
+
+A gamma ramp is display state, not process state: nothing restores it when
+the application dies, so the desktop stays dark until something else sets
+it. That is what made this look like a driver or compositor failure rather
+than an application one.
+
+Report the failure, and only restore a ramp that was captured.
+
+Reproduced on macOS 26 with a DirectDraw 2D test: two identical runs, the
+second one black on exit, gamma reading 0.000 across all three channels.
+
+diff --git a/dlls/wined3d/directx.c b/dlls/wined3d/directx.c
+index 8f13e84..bc86b59 100644
+--- a/dlls/wined3d/directx.c
++++ b/dlls/wined3d/directx.c
+@@ -1778,8 +1778,23 @@ HRESULT wined3d_output_get_gamma_ramp(struct wined3d_output *output, struct wine
+ 
+     TRACE("output %p, ramp %p.\n", output, ramp);
+ 
+-    dc = CreateDCW(output->device_name, NULL, NULL, NULL);
+-    GetDeviceGammaRamp(dc, ramp);
++    if (!(dc = CreateDCW(output->device_name, NULL, NULL, NULL)))
++    {
++        WARN("Failed to create a DC for %s.\n", debugstr_w(output->device_name));
++        return WINED3DERR_INVALIDCALL;
++    }
++
++    /* Whether this succeeded used to be ignored, and the caller told that it
++     * had. It leaves *ramp untouched when it fails, so a caller reading into
++     * zeroed storage came away holding an all-zero ramp and no way to know --
++     * and writing that back turns every pixel on the display black. */
++    if (!GetDeviceGammaRamp(dc, ramp))
++    {
++        WARN("Failed to read the gamma ramp for %s.\n", debugstr_w(output->device_name));
++        DeleteDC(dc);
++        return WINED3DERR_INVALIDCALL;
++    }
++
+     DeleteDC(dc);
+ 
+     return WINED3D_OK;
+diff --git a/dlls/wined3d/swapchain.c b/dlls/wined3d/swapchain.c
+index cf73b56..a19e11c 100644
+--- a/dlls/wined3d/swapchain.c
++++ b/dlls/wined3d/swapchain.c
+@@ -48,7 +48,12 @@ void wined3d_swapchain_cleanup(struct wined3d_swapchain *swapchain)
+     TRACE("Destroying swapchain %p.\n", swapchain);
+ 
+     wined3d_swapchain_state_cleanup(&swapchain->state);
+-    wined3d_swapchain_set_gamma_ramp(swapchain, 0, &swapchain->orig_gamma);
++    /* Only put back a ramp that was actually read. Restoring one that was not
++     * means writing zeroes, which blacks out the whole display -- and it
++     * outlives the process, so the desktop stays dark after the application
++     * has exited. */
++    if (swapchain->orig_gamma_valid)
++        wined3d_swapchain_set_gamma_ramp(swapchain, 0, &swapchain->orig_gamma);
+ 
+     /* Release the swapchain's draw buffers. Make sure swapchain->back_buffers[0]
+      * is the last buffer to be destroyed, FindContext() depends on that. */
+@@ -1693,7 +1698,8 @@ static HRESULT wined3d_swapchain_init(struct wined3d_swapchain *swapchain, struc
+         }
+     }
+ 
+-    wined3d_swapchain_get_gamma_ramp(swapchain, &swapchain->orig_gamma);
++    swapchain->orig_gamma_valid =
++            SUCCEEDED(wined3d_swapchain_get_gamma_ramp(swapchain, &swapchain->orig_gamma));
+ 
+     wined3d_mutex_unlock();
+ 
+diff --git a/dlls/wined3d/wined3d_private.h b/dlls/wined3d/wined3d_private.h
+index 1aed310..2091bb3 100644
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -4114,6 +4114,7 @@ struct wined3d_swapchain
+     struct wined3d_texture **back_buffers;
+     struct wined3d_texture *front_buffer;
+     struct wined3d_gamma_ramp orig_gamma;
++    bool orig_gamma_valid;
+     bool reapply_mode;
+     const struct wined3d_format *ds_format;
+     struct wined3d_palette *palette;
