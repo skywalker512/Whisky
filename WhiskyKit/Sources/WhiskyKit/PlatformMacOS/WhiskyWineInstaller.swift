@@ -31,30 +31,6 @@ public class WhiskyWineInstaller {
     /// URL to the installed `wine` `bin` directory
     public static let binFolder: URL = libraryFolder.appending(path: "Wine").appending(path: "bin")
 
-    /// Where the KosmicKrisp (Mesa) driver keeps its compiled shaders.
-    ///
-    /// Mesa derives its own default from `XDG_CACHE_HOME`/`HOME`, and under
-    /// Wine that never produced a cache directory at all — so every launch
-    /// recompiled every pipeline from scratch. Pointing it somewhere stable
-    /// turns a per-launch compile storm into a one-time cost per pipeline,
-    /// which matters most for the legacy fixed-function paths (DirectDraw,
-    /// D3D8) that replay hundreds of pipelines at once.
-    public static let shaderCacheFolder = applicationFolder.appending(path: "ShaderCache")
-
-    /// `shaderCacheFolder`, created if missing. Returns nil when it cannot be
-    /// created, so a caller can leave the variable unset rather than point the
-    /// driver at a path it will fail to write.
-    public static func ensureShaderCacheFolder() -> URL? {
-        do {
-            try FileManager.default.createDirectory(
-                at: shaderCacheFolder, withIntermediateDirectories: true
-            )
-            return shaderCacheFolder
-        } catch {
-            return nil
-        }
-    }
-
     public static func isWhiskyWineInstalled() -> Bool {
         return whiskyWineVersion() != nil
     }

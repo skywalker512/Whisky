@@ -291,23 +291,23 @@ public class Wine {
             // WINEMSYNC=0. Coarser lever if it ever regresses: WINEMSYNC_NO_EVENT=1
             // (all events -> server). Ignored when msync is off / lever absent.
             "WINEMSYNC_NO_MANUALEVENT": "1",
-            // Cap how many pipelines DXVK compiles at once. Its default scales
-            // with the core count, and every pipeline becomes a Metal compile
-            // inside the KosmicKrisp driver. A fixed-function title replaying
-            // its whole pipeline set has reached ~570 compiles in one second
-            // and taken the GPU driver -- and with it the display -- down: the
-            // machine froze with a black screen and no panic log, because the
-            // driver stopped answering before anything could be written. Four
-            // keeps compilation off the critical path without flooding it.
+            // Bound how many pipelines DXVK compiles at once. Its default is
+            // derived from the core count (~10 workers on a 12-core machine),
+            // and under KosmicKrisp every Vulkan pipeline becomes a separate
+            // Metal compile. D3D9/D3D8 fixed function is what makes that a
+            // flood: DXVK draws it with one uber-shader specialised per render
+            // state, so each state combination is another pipeline, and a
+            // legacy title walking its state space reached ~570 compiles in a
+            // second and left the GPU driver unresponsive -- black display,
+            // frozen machine, no panic log.
+            //
+            // Four is a deliberately conservative ceiling, not a measured
+            // optimum: what the driver tolerates has not been bisected, and
+            // capping concurrency does not reduce the total number of
+            // compiles. It also does nothing for DirectDraw/D3D7, which reach
+            // the GPU through wined3d and OpenGL rather than DXVK.
             "DXVK_CONFIG": "dxvk.numCompilerThreads = 4",
         ]
-        // A cache the driver can actually find. Left to itself under Wine it
-        // wrote nothing, so each launch paid for every pipeline again --
-        // repeating the storm above on every run instead of only the first.
-        if let shaderCache = WhiskyWineInstaller.ensureShaderCacheFolder() {
-            result["MESA_SHADER_CACHE_DIR"] = shaderCache.path(percentEncoded: false)
-            result["MESA_SHADER_CACHE_MAX_SIZE"] = "4G"
-        }
         bottle.settings.environmentVariables(wineEnv: &result)
         guard !environment.isEmpty else { return result }
         result.merge(environment, uniquingKeysWith: { $1 })
