@@ -90,11 +90,11 @@ index 4f19100bbb8..f5b788311cf 100644
  
      TRACE("%p\n", hwnd);
  
-+    /* Before get_win_data(): releasing the surface takes win32u's surfaces_lock
-+     * and then win_data_mutex (via the detach callback), which is the order
-+     * update_client_surfaces() uses. Doing it while already holding win_data
-+     * would invert that pair and can deadlock against a concurrent update.
-+     * Being first also means the early return below cannot leak the surface. */
++    /* The client surfaces are detached a frame up, in win32u's destroy_window()
++     * right before it calls pDestroyWindow, and this driver must leave it there:
++     * releasing one takes surfaces_lock and then win_data_mutex (via the detach
++     * callback), the order update_client_surfaces() uses, so detaching from here
++     * -- already inside win_data -- inverts that pair and can deadlock. */
      if (!(data = get_win_data(hwnd))) return;
  
      if (hwnd == get_capture()) macdrv_SetCapture(0, 0);
