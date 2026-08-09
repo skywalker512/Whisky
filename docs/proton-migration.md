@@ -23,7 +23,7 @@ tree that plain WineHQ 11.13 lacks.
   (`WINEMSYNC=1` is **not** set — `do_msync()` defaults msync ON, so it was dropped as
   redundant; only the `.none` sync mode sets `WINEMSYNC=0`.)
 - Source tree `vendor/proton-wine/` is **gitignored**, tag `proton-wine-11.0-…`. Tracked
-  in main: `patches/proton-wine/` (**22-patch series**, base `c3007e6f` on Valve's
+  in main: `patches/proton-wine/` (**23-patch series**, base `c3007e6f` on Valve's
   `bleeding-edge`) + `scripts/build-proton-x86.sh`
   (`make proton` — the single Wine build; configures, builds, installs to `Libraries/Wine`);
   `scripts/build-dxmt.sh` defaults `DXMT_WINE_BUILD` to `vendor/proton-wine/build`.
@@ -55,7 +55,7 @@ frame.
   `if (do_msync()) return msync_*`; also added the missing msync branch to
   `NtWaitForSingleObject` (only `NtWaitForMultipleObjects` had it).
 
-## patches/proton-wine/ — 22-patch series
+## patches/proton-wine/ — 23-patch series
 Base: **`c3007e6f`** on Valve's `bleeding-edge` — the only branch Valve still pushes to
 (see the header comment in `scripts/build-proton-x86.sh`, which is the source of truth).
 
@@ -70,7 +70,8 @@ abandoned-mutex on last-handle-close, `0017` D3D/Vulkan builtin load-order defau
 `steamwebhelper.exe` (retires the IFEO wrapper — see `docs/steam-webhelper.md`),
 `0021` ws2_32 `WSALookupServiceBegin` half-stub, `0022` server clears stale
 `AFD_POLL_CONNECT_ERR` on socket reuse (backport of upstream `864ca426`, Wine 11.14),
-`0023` winemac snaps a borderless work-area-origin fullscreen window.
+`0023` winemac snaps a borderless work-area-origin fullscreen window,
+`0025` winemac refuses application gamma writes by default (`0024` **dropped** → gap).
 
 ### Editing the series — `scripts/proton-branch.sh`
 The `.patch` files stay the source of truth for a fresh clone, since `vendor/proton-wine`
@@ -238,6 +239,23 @@ conformance work above: msync-only failures went **6 → 2**.
   - a `scripts/check-dxmt-abi.sh` guard existed briefly (`21adee60`) to police the
     struct ABI and was **deleted the same night** (`2744d49a`): with scalar arguments
     there is nothing to police. It does not exist; ignore any reference to it.
+- `0025-macos-no-gamma-writes-by-default` — a DirectDraw test blacked the whole Mac
+  display on exit and it stayed black after the process was gone. The ramp belongs to
+  the display, not to a process, so nothing puts it back, and a user looking at a black
+  screen cannot fix it from the machine itself. wined3d writes the saved ramp back on
+  every swapchain teardown (`swapchain.c` `wined3d_swapchain_cleanup`) without ever
+  checking that the read which produced it worked — `wined3d_output_get_gamma_ramp`
+  ignores both `CreateDCW` and `GetDeviceGammaRamp` and returns `WINED3D_OK` regardless,
+  so a failed read leaves the calloc'd `orig_gamma` all zeroes and teardown writes those.
+  Wine master and CrossOver 26.3 carry that code unchanged.
+  A patch fixing exactly that was written and **discarded** (`0024`, in history at
+  `740ac73`): with it installed the test still blacked the screen on the second run,
+  because the swapchain is not the only route — `ddraw/surface.c` calls
+  `wined3d_device_set_gamma_ramp` directly. Refusing the write in the driver is what
+  actually holds, and it is where CrossOver draws the line too, as
+  `"AllowSetGamma"=dword:00000000` in its stock bottle. The registry key still turns it
+  back on per prefix. The wined3d bug remains worth reporting upstream; do not re-add a
+  local patch for it on the theory that it prevents this.
 - `0023-macos-snap-borderless-fullscreen-window` — `rcWork` and `rcMonitor` share an
   origin on Windows (taskbar at the bottom) but not on macOS (menu bar at the top);
   measured in a bottle: `rcMonitor 0,0 1470x956` vs `rcWork 0,33 1470x923`. An app that
