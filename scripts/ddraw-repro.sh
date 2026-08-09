@@ -73,6 +73,53 @@ BOTTLE="${WHISKY_BOTTLE:-$(ls -d "$BOTTLES"/*/ 2>/dev/null | head -1)}"
 
 OUT="/tmp/ddraw-repro-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"
+JOURNAL="$OUT/journal.txt"
+
+# Everything is also written to a file as it happens. Once the display is black
+# there is nothing to read on screen, and a run that has to be watched to be
+# useful is no use at all for the failure being chased.
+exec > >(tee -a "$JOURNAL") 2>&1
+
+# A black screen is announced out loud, because that is the one channel the
+# failure does not take away.
+announce() { command say -r 200 "$*" >/dev/null 2>&1 & }
+
+SCREEN_BIN="/tmp/whisky-screen-state"
+if [ ! -x "$SCREEN_BIN" ] && [ -f "$SCRIPT_DIR/screen-state.c" ]; then
+    cc -O2 -o "$SCREEN_BIN" "$SCRIPT_DIR/screen-state.c" -framework ApplicationServices 2>/dev/null
+fi
+
+# What the screen looks like before anything has run. A covering window is only
+# meaningful as "one that was not there a moment ago", so the comparison needs
+# a before.
+if [ -x "$SCREEN_BIN" ]; then
+    "$SCREEN_BIN" > "$OUT/screen-baseline.txt" 2>&1
+    BASELINE_WINDOWS=$(grep -c '^  [0-9-]' "$OUT/screen-baseline.txt" 2>/dev/null || echo 0)
+else
+    BASELINE_WINDOWS=0
+    warn "screen-state probe unavailable -- a black screen will not be detected automatically"
+fi
+
+# Is the display showing anything? Answers the two states a healthy compositor
+# can still render as black: a gamma ramp collapsed to zero, and a window that
+# appeared over everything. Echoes "ok", or a reason.
+screen_verdict() {   # <file to write the probe output to>
+    local file="$1"
+    [ -x "$SCREEN_BIN" ] || { echo "unknown"; return; }
+    "$SCREEN_BIN" > "$file" 2>&1
+
+    if grep -q 'GAMMA IS BLACK' "$file"; then
+        echo "gamma collapsed to zero"
+        return
+    fi
+    local now
+    now=$(grep -c '^  [0-9-]' "$file" 2>/dev/null || echo 0)
+    if [ "$now" -gt "$((BASELINE_WINDOWS + 2))" ]; then
+        echo "$((now - BASELINE_WINDOWS)) more on-screen windows than before the run"
+        return
+    fi
+    echo ok
+}
 
 # --- one run -----------------------------------------------------------------
 run_once() {  # <renderer>
@@ -155,13 +202,41 @@ run_once() {  # <renderer>
     printf '%s\t%s\t%s\t%s\t%s\n' "$tag" "$rc" "$compiles" "$gpuerr" "$started" \
         >> "$OUT/summary.tsv"
 
-    say "Screen still OK? (give it a few seconds)"
+    # Let the compositor settle before asking: the window is torn down
+    # asynchronously and a verdict taken too early reports the teardown, not
+    # the state it settles into.
     sleep 3
+    local verdict
+    verdict="$(screen_verdict "$OUT/$tag.screen.txt")"
+    echo "  screen after the run: $verdict"
+    printf '%s\tscreen: %s\n' "$tag" "$verdict" >> "$OUT/summary.tsv"
+
+    if [ "$verdict" != ok ] && [ "$verdict" != unknown ]; then
+        warn "  DISPLAY BROKE -- $verdict"
+        announce "black screen detected. stopping."
+        SCREEN_BROKE=1
+
+        # Cycling display power re-runs the mode set and the gamma upload, the
+        # cheapest thing that touches both suspected states. It kills nothing.
+        say "Trying to bring the display back (nothing is killed)"
+        pmset displaysleepnow
+        sleep 4
+        caffeinate -u -t 3
+        sleep 2
+        echo "  after the display cycle: $(screen_verdict "$OUT/$tag.screen-after.txt")"
+    else
+        announce "pass done. screen ok."
+    fi
 }
 
 printf 'test\texit\tcompiles\tgpu_errors\tstarted\n' > "$OUT/summary.tsv"
 
+SCREEN_BROKE=0
 for i in $(seq 1 "$REPEAT"); do
+    if [ "$SCREEN_BROKE" = 1 ]; then
+        warn "Stopping after pass $((i - 1)): further passes would run blind"
+        break
+    fi
     [ "$REPEAT" -gt 1 ] && say "Pass $i of $REPEAT"
     if [ "$BOTH" = 1 ]; then
         run_once gl
@@ -177,6 +252,6 @@ done
 say "Summary"
 column -t -s "$(printf '\t')" "$OUT/summary.tsv"
 echo
-echo "Everything written to $OUT"
+echo "Everything written to $OUT (journal.txt has this whole transcript)"
 echo "If the display breaks later, ssh in from another host and run:"
 echo "  $SCRIPT_DIR/whisky-panic.sh --session"
