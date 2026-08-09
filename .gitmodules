@@ -2,9 +2,11 @@
 	path = vendor/dxmt
 	url = https://github.com/3Shain/dxmt.git
 	branch = main
+	shallow = true
 [submodule "vendor/dxvk"]
 	path = vendor/dxvk
 	url = https://github.com/doitsujin/dxvk.git
+	shallow = true
 [submodule "vendor/mesa"]
 	path = vendor/mesa
 	url = https://gitlab.freedesktop.org/mesa/mesa.git
@@ -14,3 +16,4 @@
 	path = vendor/sdl2
 	url = https://github.com/libsdl-org/SDL.git
 	branch = release-2.30.x
+	shallow = true
