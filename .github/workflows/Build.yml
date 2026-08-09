@@ -1,0 +1,64 @@
+name: Build
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  app:
+    name: Build Whisky (macOS)
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          xcodebuild -showsdks | grep macosx || true
+
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Whisky.xcodeproj \
+            -scheme Whisky
+
+      - name: Build (Release, unsigned)
+        run: |
+          set -o pipefail
+          XCB=(xcodebuild
+            -project Whisky.xcodeproj
+            -scheme Whisky
+            -configuration Release
+            -destination "platform=macOS,arch=arm64"
+            -derivedDataPath "$RUNNER_TEMP/DerivedData"
+            CODE_SIGN_IDENTITY="-"
+            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_ALLOWED=NO
+            build)
+          if command -v xcbeautify >/dev/null 2>&1; then
+            "${XCB[@]}" | xcbeautify --quieter
+          else
+            "${XCB[@]}"
+          fi
+
+      - name: Upload Whisky.app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Whisky-Release
+          path: ${{ runner.temp }}/DerivedData/Build/Products/Release/Whisky.app
+          if-no-files-found: error
+          retention-days: 14

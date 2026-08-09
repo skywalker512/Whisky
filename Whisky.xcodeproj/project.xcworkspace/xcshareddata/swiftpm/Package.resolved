@@ -4,7 +4,7 @@
     {
       "identity" : "semanticversion",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:SwiftPackageIndex/SemanticVersion.git",
+      "location" : "https://github.com/SwiftPackageIndex/SemanticVersion.git",
       "state" : {
         "revision" : "330bab3e41aad91fb3b1b0f779d1325738e54b93",
         "version" : "0.5.3"
