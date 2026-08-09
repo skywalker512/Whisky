@@ -17,7 +17,7 @@
 # Run it over ssh (Tailscale reaches the machine while the screen is dark):
 #
 #   scripts/whisky-panic.sh                 # collect evidence, then kill Wine
-#   scripts/whisky-panic.sh --session       # also re-init the window session
+#   scripts/whisky-panic.sh --session       # also cycle the display
 #   scripts/whisky-panic.sh --wsrestart     # restart WindowServer (logs you out)
 #   scripts/whisky-panic.sh --reboot        # clean reboot, last resort
 #
@@ -92,6 +92,22 @@ else
     echo "(not permitted -- add /usr/bin/powermetrics to /etc/sudoers.d)"
 fi
 
+# WindowServer composited normally through the 2026-08-09 18:47 outage -- its
+# stack was indistinguishable from a healthy one -- so a black screen can be
+# something the compositor is faithfully drawing: a window covering everything,
+# or a gamma ramp that maps every value to zero. Neither appears in any log.
+say "What the display is actually showing (windows + gamma)"
+SCREEN_STATE="$SCRIPT_DIR/screen-state.c"
+SCREEN_BIN="/tmp/whisky-screen-state"
+if [ -f "$SCREEN_STATE" ]; then
+    [ -x "$SCREEN_BIN" ] || cc -O2 -o "$SCREEN_BIN" "$SCREEN_STATE" -framework ApplicationServices 2>/dev/null
+    if [ -x "$SCREEN_BIN" ]; then
+        "$SCREEN_BIN" | tee "$EVIDENCE/screen-state.txt"
+    else
+        echo "(could not build $SCREEN_STATE)"
+    fi
+fi
+
 say "System-wide spindump (catches whoever else is stuck)"
 if sudo -n /usr/sbin/spindump -reveal 2 1 -file "$EVIDENCE/spindump.txt" >/dev/null 2>&1; then
     echo "written to $EVIDENCE/spindump.txt"
@@ -122,13 +138,15 @@ say "Flushing filesystem buffers"
 sync
 
 if [ "$DO_SESSION" = 1 ]; then
-    # Drops to the login window and rebuilds the session's window state. No
-    # process is killed -- every app is still there after logging back in --
-    # and unlike restarting WindowServer it needs no root. This is what fixed
-    # the 2026-08-09 18:25 black screen: WindowServer went from 41% CPU to
-    # 2.7% and the display came back, with the whole session intact.
-    say "Re-initialising the window session (log back in; nothing is killed)"
-    "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession" -suspend
+    # Cycling display power re-runs the mode set and the gamma upload, which is
+    # the cheapest thing that touches both of the states a healthy compositor
+    # can still render as black. Nothing is killed. CGSession -suspend used to
+    # live here on the claim that it recovered the 18:25 outage; that binary
+    # does not exist on macOS 26, so it never ran and cannot have.
+    say "Cycling the display (nothing is killed)"
+    pmset displaysleepnow
+    sleep 4
+    caffeinate -u -t 3
 fi
 
 if [ "$DO_WSRESTART" = 1 ]; then
